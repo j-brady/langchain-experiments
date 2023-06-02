@@ -55,7 +55,7 @@ def save_messages(memory, path):
 
 
 @cli.command()
-def main(directory: Path, history: Optional[Path] = None, ftype: FtypeEnum = "pdf"):
+def main(directory: Path, history: Optional[Path] = None, ftype: FtypeEnum = FtypeEnum.pdf, gradio: bool=False):
     docs = load_data(directory, ftype)
     embeddings = OpenAIEmbeddings()
     vectorstore = Chroma.from_documents(
@@ -83,21 +83,22 @@ def main(directory: Path, history: Optional[Path] = None, ftype: FtypeEnum = "pd
         return_source_documents=True,
     )
 
-    with gr.Blocks() as demo:
-        chatbot = gr.Chatbot()
-        msg = gr.Textbox()
-        clear = gr.Button("Clear")
+    if gradio:
+        with gr.Blocks() as demo:
+            chatbot = gr.Chatbot()
+            msg = gr.Textbox()
+            clear = gr.Button("Clear")
 
-        def respond(query, chat_history):
-            result = qa({"question": query})
-            save_messages(memory, history_path)
-            chat_history.append((query, result["answer"]))
-            time.sleep(1)
-            return "", chat_history
+            def respond(query, chat_history):
+                result = qa({"question": query})
+                save_messages(memory, history_path)
+                chat_history.append((query, result["answer"]))
+                time.sleep(1)
+                return "", chat_history
 
-        msg.submit(respond, [msg, chatbot], [msg, chatbot])
-        clear.click(lambda: None, None, chatbot, queue=False)
-    demo.launch()
+            msg.submit(respond, [msg, chatbot], [msg, chatbot])
+            clear.click(lambda: None, None, chatbot, queue=False)
+        demo.launch()
     return qa, memory
 
 

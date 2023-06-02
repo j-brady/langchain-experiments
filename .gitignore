@@ -2,3 +2,6 @@ pdfs/*
 text
 .venv
 .chroma
+*.ipynb
+!ChatNotebookExample.ipynb
+__pycache__/
