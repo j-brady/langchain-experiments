@@ -162,7 +162,7 @@ def main(
     history: Optional[Path] = None,
     ftype: FtypeEnum = FtypeEnum.pdf,
     gradio: bool = False,
-    chain_type: ChainTypeEnum = ChainTypeEnum.stuff,
+    chain_type: ChainTypeEnum = ChainTypeEnum.refine,
     memory_type: MemoryTypeEnum = MemoryTypeEnum.standard,
     max_token_limit: int = 4097,
     temperature: float = 0.2,
