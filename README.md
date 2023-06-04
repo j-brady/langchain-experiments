@@ -24,6 +24,13 @@ You can then chat with your documents in the gradio app.
 
 Chat history is saved in `path/to/pdfs/history.txt` by default but the location can be changed using the `--history path/to/pdfs/alternate_history.txt`.
 
+Alternatively, you can run the `jupyter-notebook`.
+
+```bash
+jupyter-notebook ChatNotebookExample.ipynb
+```
+
+
 ## Todo
 
 - Chat history is stored on disk and used to repopulate the `ConversationBufferMemory` however, this is not updated on the gradio app which makes it hard to see the history unless you directly read the history file.

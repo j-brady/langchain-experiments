@@ -5,3 +5,4 @@ text
 *.ipynb
 !ChatNotebookExample.ipynb
 __pycache__/
+.ipynb_checkpoints/
