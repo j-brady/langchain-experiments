@@ -15,7 +15,7 @@ from langchain.chat_models import ChatOpenAI
 from langchain.memory import ConversationBufferMemory, ConversationTokenBufferMemory
 from langchain.schema import messages_from_dict, messages_to_dict
 
-cli = typer.Typer()
+# cli = typer.Typer()
 
 
 class FtypeEnum(Enum):
@@ -98,20 +98,58 @@ def convert_type(dic):
 class Chat:
     def __init__(
         self,
-        qa,
-        previous_messages: Path,
-        memory,
+        directory: Path,
+        ftype: FtypeEnum = FtypeEnum.pdf,
+        memory_type: MemoryTypeEnum = MemoryTypeEnum.token,
+        max_token_limit: int = 4097,
+        chain_type: ChainTypeEnum = ChainTypeEnum.refine,
         auto_save: bool = True,
+        previous_messages: Path = Path("history.txt"),
         reload_previous_messages=True,
-        response_template=template,
+        response_template: str = template,
+        llm: LlmEnum = LlmEnum.gpt3,
+        temperature: float = 0.2,
     ):
-        self._qa = qa
-        self.previous_messages = previous_messages
-        self._memory = memory
+        self.directory = Path(directory)
+        self.previous_messages = self.directory / previous_messages
         self.auto_save = auto_save
         self.response_template = response_template
+
+        self._docs = load_data(self.directory, ftype)
+        embeddings = OpenAIEmbeddings()
+        self._vectorstore = Chroma.from_documents(
+            self._docs,
+            embeddings,
+            metadatas=[{"source": str(i)} for i in range(len(self._docs))],
+        )
+
+        llm = ChatOpenAI(model_name=llm.value, temperature=temperature)
+        match memory_type:
+            case MemoryTypeEnum.standard:
+                self._memory = ConversationBufferMemory(
+                    memory_key="chat_history", output_key="answer", return_messages=True
+                )
+            case MemoryTypeEnum.token:
+                self._memory = ConversationTokenBufferMemory(
+                    llm=llm,
+                    memory_key="chat_history",
+                    output_key="answer",
+                    return_messages=True,
+                    max_token_limit=max_token_limit,
+                )
+            case _:
+                raise TypeError("I don't know this memory type")
+
         if reload_previous_messages:
             self.load_chat_memory()
+
+        self._qa = ConversationalRetrievalChain.from_llm(
+            llm=llm,
+            chain_type=chain_type.value,
+            retriever=self._vectorstore.as_retriever(),
+            memory=self._memory,
+            return_source_documents=True,
+        )
 
     def respond(self, query):
         result = self._qa({"question": query})
@@ -121,7 +159,7 @@ class Chat:
         return display(Markdown(answer))
 
     def load_chat_memory(self):
-        self.memory.chat_memory.messages = messages_from_dict(
+        self._memory.chat_memory.messages = messages_from_dict(
             load_previous_messages(self.previous_messages)
         )
 
@@ -155,77 +193,46 @@ class Chat:
     def qa(self):
         return self._qa
 
+    @property
+    def vectorstore(self):
+        return self._vectorstore
 
-@cli.command()
-def main(
-    directory: Path,
-    history: Optional[Path] = None,
-    ftype: FtypeEnum = FtypeEnum.pdf,
-    gradio: bool = False,
-    chain_type: ChainTypeEnum = ChainTypeEnum.refine,
-    memory_type: MemoryTypeEnum = MemoryTypeEnum.standard,
-    max_token_limit: int = 4097,
-    temperature: float = 0.2,
-    llm: LlmEnum = LlmEnum.gpt3,
-):
-    docs = load_data(directory, ftype)
-    embeddings = OpenAIEmbeddings()
-    vectorstore = Chroma.from_documents(
-        docs,
-        embeddings,
-        # metadatas=[{"source": str(i)} for i in range(len(docs))]
-    )
-
-    llm = ChatOpenAI(model_name=llm.value, temperature=temperature)
-
-    match memory_type:
-        case MemoryTypeEnum.standard:
-            memory = ConversationBufferMemory(
-                memory_key="chat_history", output_key="answer", return_messages=True
-            )
-        case MemoryTypeEnum.token:
-            memory = ConversationTokenBufferMemory(
-                llm=llm,
-                memory_key="chat_history",
-                output_key="answer",
-                return_messages=True,
-                max_token_limit=max_token_limit,
-            )
-
-    if history == None:
-        history_path = directory / "history.txt"
-    else:
-        history_path = Path(history)
-    memory.chat_memory.messages = messages_from_dict(
-        load_previous_messages(history_path)
-    )
-
-    qa = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        chain_type=chain_type.value,
-        retriever=vectorstore.as_retriever(),
-        memory=memory,
-        return_source_documents=True,
-    )
-
-    if gradio:
-        with gr.Blocks() as demo:
-            chatbot = gr.Chatbot()
-            msg = gr.Textbox()
-            clear = gr.Button("Clear")
-
-            def respond(query, chat_history):
-                result = qa({"question": query})
-                save_messages(memory, history_path)
-                chat_history.append((query, result["answer"]))
-                time.sleep(1)
-                return "", chat_history
-
-            msg.submit(respond, [msg, chatbot], [msg, chatbot])
-            clear.click(lambda: None, None, chatbot, queue=False)
-        demo.launch()
-    return qa, memory
+    @property
+    def docs(self):
+        return self._docs
 
 
-if __name__ == "__main__":
-    cli()
+# @cli.command()
+# def main(
+#    directory: Path,
+#    history: Optional[Path] = None,
+#    ftype: FtypeEnum = FtypeEnum.pdf,
+#    # gradio: bool = False,
+#    chain_type: ChainTypeEnum = ChainTypeEnum.refine,
+#    memory_type: MemoryTypeEnum = MemoryTypeEnum.standard,
+#    max_token_limit: int = 4097,
+#    temperature: float = 0.2,
+#    llm: LlmEnum = LlmEnum.gpt3,
+# ):
+
+# if gradio:
+#     with gr.Blocks() as demo:
+#         chatbot = gr.Chatbot()
+#         msg = gr.Textbox()
+#         clear = gr.Button("Clear")
+
+#         def respond(query, chat_history):
+#             result = qa({"question": query})
+#             save_messages(memory, history_path)
+#             chat_history.append((query, result["answer"]))
+#             time.sleep(1)
+#             return "", chat_history
+
+#         msg.submit(respond, [msg, chatbot], [msg, chatbot])
+#         clear.click(lambda: None, None, chatbot, queue=False)
+#     demo.launch()
+# return qa, memory
+
+
+# if __name__ == "__main__":
+#     cli()
