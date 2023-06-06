@@ -1,11 +1,11 @@
 import time
 import json
 from pathlib import Path
-from typing import Optional
 from enum import Enum
+from collections import OrderedDict
 
-import typer
-import gradio as gr
+import pandas as pd
+import numpy as np
 from IPython.display import display, Markdown
 from langchain.document_loaders import DirectoryLoader
 from langchain.embeddings.openai import OpenAIEmbeddings
@@ -75,7 +75,18 @@ template = """
 
 **Answer:** %s
 
+
+
+<details> 
+<summary><b>Sources (click to expand):</b><summary>
+
+
+%s
+
+
+</details>
 <hr style="height:2px;border-width:0;color:black;background-color:black">
+
 
 """
 
@@ -84,6 +95,29 @@ hr = """
 <hr style="height:2px;border-width:0;color:black;background-color:black">
 
 """
+
+source_template = """
+
+
+<details> <summary>   %d) <i>%s</i> [%d]</summary>
+
+    %s
+
+</details>
+
+    
+"""
+
+
+def format_source_details(source_documents) -> str:
+    source_details = ""
+    for num, source_document in enumerate(source_documents):
+        page_content = source_document.page_content
+        metadata = source_document.metadata
+        source = metadata.get("source", "")
+        index = metadata.get("index", 0)
+        source_details += source_template % (num + 1, source, index, page_content)
+    return source_details
 
 
 def convert_type(dic):
@@ -116,11 +150,15 @@ class Chat:
         self.response_template = response_template
 
         self._docs = load_data(self.directory, ftype)
+        self.update_metadata()
         embeddings = OpenAIEmbeddings()
         self._vectorstore = Chroma.from_documents(
             self._docs,
             embeddings,
-            metadatas=[{"source": str(i)} for i in range(len(self._docs))],
+            # metadatas=[
+            #     {"source": self._docs[i].metadata["source"]+f"/{i}"}
+            #     for i in range(len(self._docs))
+            # ],
         )
 
         llm = ChatOpenAI(model_name=llm.value, temperature=temperature)
@@ -151,9 +189,23 @@ class Chat:
             return_source_documents=True,
         )
 
+    def update_metadata(self):
+        doc_dic = OrderedDict(page_content=[], source=[])
+        for i in self._docs:
+            doc_dic["page_content"].append(i.page_content)
+            doc_dic["source"].append(i.metadata["source"])
+        df = pd.DataFrame(doc_dic)
+        df["source_index"] = 0
+        for name, group in df.groupby("source"):
+            df.loc[df.source == name, "source_index"] = np.arange(len(group))
+        for ind, row in df.iterrows():
+            self._docs[ind].metadata["index"] = row.source_index
+        self.df = df
+
     def respond(self, query):
         result = self._qa({"question": query})
-        answer = self.response_template % (query, result["answer"])
+        sources = format_source_details(result["source_documents"])
+        answer = self.response_template % (query, result["answer"], sources)
         if self.auto_save:
             save_messages(self._memory, self.previous_messages)
         return display(Markdown(answer))
