@@ -12,8 +12,11 @@ from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
-from langchain.memory import ConversationBufferMemory, ConversationTokenBufferMemory
-from langchain.schema import messages_from_dict, messages_to_dict
+from langchain.memory import (
+    ConversationBufferMemory,
+    ConversationTokenBufferMemory,
+)
+from langchain.schema import messages_from_dict, messages_to_dict, Document
 
 # cli = typer.Typer()
 
@@ -47,7 +50,10 @@ def load_data(directory, ftype: FtypeEnum):
             glob = directory / "*.txt"
         case _:
             raise "NotImplemented"
-    loader = DirectoryLoader("", glob=str(glob))
+    loader = DirectoryLoader(
+        "",
+        glob=str(glob),
+    )
     docs = loader.load_and_split()
     return docs
 
@@ -62,12 +68,60 @@ def load_previous_messages(path):
         return []
 
 
-def save_messages(memory, path):
-    previous_messages = load_previous_messages(path)
-    current_messages = messages_to_dict(memory.chat_memory.messages)
-    previous_messages.extend(current_messages[len(previous_messages) :])
-    with open(path, "w") as history:
-        json.dump(previous_messages, history)
+def save_source_documents(result, source_path):
+    source_documents = [i.dict() for i in result.get("source_documents", [])]
+    answer = result["answer"]
+    # chat_history = result["chat_history"].dict()
+    question = result["question"]
+    source_path = Path(source_path)
+    if source_path.is_file():
+        with open(source_path) as f:
+            sources = json.load(f)
+    else:
+        sources = []
+    source_dict = dict(
+        source_documents=source_documents, answer=answer, question=question
+    )
+    sources.append(source_dict)
+    with open(source_path, "w") as f:
+        json.dump(sources, f)
+
+
+def load_source_documents(source_path):
+    source_path = Path(source_path)
+    if source_path.is_file():
+        with open(source_path) as f:
+            sources = json.load(f)
+            history = []
+            for i in sources:
+                history.extend(
+                    [
+                        {
+                            "type": "human",
+                            "data": {
+                                "content": i["question"],
+                                "additional_kwargs": {},
+                                "example": False,
+                            },
+                        },
+                        {
+                            "type": "ai",
+                            "data": {
+                                "content": i["answer"],
+                                "additional_kwargs": {
+                                    "source_documents": [
+                                        Document(**j)
+                                        for j in i.get("source_documents", [])
+                                    ]
+                                },
+                                "example": False,
+                            },
+                        },
+                    ]
+                )
+            return history
+    else:
+        return []
 
 
 template = """
@@ -204,15 +258,20 @@ class Chat:
 
     def respond(self, query):
         result = self._qa({"question": query})
-        sources = format_source_details(result["source_documents"])
-        answer = self.response_template % (query, result["answer"], sources)
+        source_documents = result["source_documents"]
         if self.auto_save:
-            save_messages(self._memory, self.previous_messages)
+            save_source_documents(result, source_path=self.previous_messages)
+            # save_messages(self._memory, self.previous_messages)
+        return result, source_documents
+
+    def format_response(self, query, result, source_documents):
+        sources = format_source_details(source_documents)
+        answer = self.response_template % (query, result, sources)
         return display(Markdown(answer))
 
     def load_chat_memory(self):
         self._memory.chat_memory.messages = messages_from_dict(
-            load_previous_messages(self.previous_messages)
+            load_source_documents(self.previous_messages)
         )
 
     def start(self):
@@ -220,13 +279,17 @@ class Chat:
         while True:
             if n == 0:
                 # display previous messages at beginning of session
-                previous = load_previous_messages(self.previous_messages)
-                for i in previous:
-                    message_type = convert_type(i)
-                    message_string = f"**{message_type}:** {i['data']['content']}"
-                    if message_type == "Answer":
-                        message_string += hr
-                    display(Markdown(message_string))
+                previous = load_source_documents(self.previous_messages)
+                previous = messages_from_dict(previous)
+                # previous = load_source_documents(self.previous_messages)
+                for i in range(0, len(previous), 2):
+                    self.format_response(
+                        query=previous[i].content,
+                        result=previous[i + 1].content,
+                        source_documents=previous[i + 1].additional_kwargs.get(
+                            "source_documents", []
+                        ),
+                    )
 
             time.sleep(0.5)
             query = input("You: ")
@@ -235,7 +298,8 @@ class Chat:
                 break
             else:
                 n += 1
-                self.respond(query)
+                result, source_documents = self.respond(query)
+                self.format_response(query, result["answer"], source_documents)
 
     @property
     def memory(self):

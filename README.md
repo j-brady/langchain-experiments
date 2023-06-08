@@ -18,22 +18,35 @@ You also need an OpenAI API KEY.
 
 Assuming you have a directory with `.pdf` files you can simply provide a path to that directory.
 
-`python app.py path/to/pdfs/`
 
-You can then chat with your documents in the gradio app.
+See the example `jupyter-notebook` `ChatNotebookExample.ipynb`.
 
-Chat history is saved in `path/to/pdfs/history.txt` by default but the location can be changed using the `--history path/to/pdfs/alternate_history.txt`.
-
-Alternatively, you can run the `jupyter-notebook`.
+To run:
 
 ```bash
 jupyter-notebook ChatNotebookExample.ipynb
 ```
 
+```python
+from pathlib import Path
+
+from app import Chat
+
+pdfs = Path("pdfs/")
+chat = Chat(pdfs)
+```
+
+Chat history is saved in `path/to/pdfs/history.txt` by default but the location can be changed using the `previous_messages` keyword argument when instantiating the Chat class:
+
+```python
+pdfs = Path("pdfs/")
+chat = Chat(pdfs,previous_messages="alternate_history.txt")
+```
+
+
 
 ## Todo
-
-- Chat history is stored on disk and used to repopulate the `ConversationBufferMemory` however, this is not updated on the gradio app which makes it hard to see the history unless you directly read the history file.
-
+- Optimize chunking of text
+- Extend to other formats
 - Integrate into emacs or other text editor for more effective note taking.
 
