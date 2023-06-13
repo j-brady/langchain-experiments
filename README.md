@@ -34,6 +34,7 @@ from app import Chat
 
 pdfs = Path("pdfs/")
 chat = Chat(pdfs)
+chat.start()
 ```
 
 Chat history is saved in `path/to/pdfs/history.txt` by default but the location can be changed using the `previous_messages` keyword argument when instantiating the Chat class:
@@ -41,6 +42,7 @@ Chat history is saved in `path/to/pdfs/history.txt` by default but the location 
 ```python
 pdfs = Path("pdfs/")
 chat = Chat(pdfs,previous_messages="alternate_history.txt")
+chat.start()
 ```
 
 
