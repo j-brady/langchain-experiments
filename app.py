@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from enum import Enum
 from collections import OrderedDict
+from typing import List, Optional
 
 import pandas as pd
 import numpy as np
@@ -15,10 +16,9 @@ from langchain.chat_models import ChatOpenAI
 from langchain.memory import (
     ConversationBufferMemory,
     ConversationTokenBufferMemory,
+    ConversationSummaryBufferMemory,
 )
-from langchain.schema import messages_from_dict, messages_to_dict, Document
-
-# cli = typer.Typer()
+from langchain.schema import messages_from_dict, Document
 
 
 class FtypeEnum(Enum):
@@ -35,30 +35,46 @@ class ChainTypeEnum(Enum):
 class MemoryTypeEnum(Enum):
     token = ConversationTokenBufferMemory
     standard = ConversationBufferMemory
+    summary_buffer = ConversationSummaryBufferMemory
 
 
 class LlmEnum(Enum):
     gpt3 = "gpt-3.5-turbo"
+    gpt4 = "gpt4"
 
 
-def load_data(directory, ftype: FtypeEnum):
+def load_data(
+    directory: Path, ftype: FtypeEnum, glob: Optional[str] = None
+) -> List[Document]:
     directory = Path(directory)
-    match ftype:
-        case ftype.pdf:
-            glob = directory / "*.pdf"
-        case ftype.txt:
-            glob = directory / "*.txt"
-        case _:
-            raise "NotImplemented"
+    if directory.is_dir():
+        pass
+    else:
+        raise FileNotFoundError(f"{directory} does not exist!")
+
+    if glob is not None:
+        try:
+            files = directory.glob(glob)
+            next(files)
+        except StopIteration:
+            raise ValueError("No files found matching pattern")
+
+    else:
+        match ftype:
+            case ftype.pdf:
+                glob = "**/*.pdf"
+            case ftype.txt:
+                glob = "**/*.txt"
+            case _:
+                raise ValueError("File type not implemented")
     loader = DirectoryLoader(
-        "",
-        glob=str(glob),
+        directory, glob=str(glob), show_progress=True, use_multithreading=True
     )
     docs = loader.load_and_split()
     return docs
 
 
-def load_previous_messages(path):
+def load_previous_messages(path: Path) -> List:
     if Path(path).is_file():
         with open(path) as messages:
             previous_messages = json.load(messages)
@@ -68,7 +84,7 @@ def load_previous_messages(path):
         return []
 
 
-def save_source_documents(result, source_path):
+def save_chat_history(result: dict, source_path: Path):
     source_documents = [i.dict() for i in result.get("source_documents", [])]
     answer = result["answer"]
     # chat_history = result["chat_history"].dict()
@@ -87,7 +103,7 @@ def save_source_documents(result, source_path):
         json.dump(sources, f)
 
 
-def load_source_documents(source_path):
+def load_chat_history(source_path: Path) -> List:
     source_path = Path(source_path)
     if source_path.is_file():
         with open(source_path) as f:
@@ -130,9 +146,9 @@ template = """
 **Answer:** %s
 
 
-
 <details> 
-<summary><b>Sources (click to expand):</b><summary>
+
+<summary><b>Sources (click to expand):</b></summary>
 
 
 %s
@@ -155,7 +171,9 @@ source_template = """
 
 <details> <summary>   %d) <i>%s</i> [%d]</summary>
 
-    %s
+
+%s
+
 
 </details>
 
@@ -163,18 +181,18 @@ source_template = """
 """
 
 
-def format_source_details(source_documents) -> str:
+def format_source_details(source_documents: List[Document]) -> str:
     source_details = ""
-    for num, source_document in enumerate(source_documents):
+    for num, source_document in enumerate(source_documents, start=1):
         page_content = source_document.page_content
         metadata = source_document.metadata
         source = metadata.get("source", "")
         index = metadata.get("index", 0)
-        source_details += source_template % (num + 1, source, index, page_content)
+        source_details += source_template % (num, source, index, page_content)
     return source_details
 
 
-def convert_type(dic):
+def convert_type(dic: dict) -> str:
     if dic.get("type") == "ai":
         return "Answer"
     elif dic.get("type") == "human":
@@ -188,8 +206,9 @@ class Chat:
         self,
         directory: Path,
         ftype: FtypeEnum = FtypeEnum.pdf,
+        glob: Optional[str] = None,
         memory_type: MemoryTypeEnum = MemoryTypeEnum.token,
-        max_token_limit: int = 4097,
+        max_token_limit: int = 1300,
         chain_type: ChainTypeEnum = ChainTypeEnum.refine,
         auto_save: bool = True,
         previous_messages: Path = Path("history.txt"),
@@ -202,17 +221,13 @@ class Chat:
         self.previous_messages = self.directory / previous_messages
         self.auto_save = auto_save
         self.response_template = response_template
-
-        self._docs = load_data(self.directory, ftype)
+        self.glob = glob
+        self._docs = load_data(self.directory, ftype, self.glob)
         self.update_metadata()
         embeddings = OpenAIEmbeddings()
         self._vectorstore = Chroma.from_documents(
             self._docs,
             embeddings,
-            # metadatas=[
-            #     {"source": self._docs[i].metadata["source"]+f"/{i}"}
-            #     for i in range(len(self._docs))
-            # ],
         )
 
         llm = ChatOpenAI(model_name=llm.value, temperature=temperature)
@@ -223,6 +238,14 @@ class Chat:
                 )
             case MemoryTypeEnum.token:
                 self._memory = ConversationTokenBufferMemory(
+                    llm=llm,
+                    memory_key="chat_history",
+                    output_key="answer",
+                    return_messages=True,
+                    max_token_limit=max_token_limit,
+                )
+            case MemoryTypeEnum.summary_buffer:
+                self._memory = ConversationSummaryBufferMemory(
                     llm=llm,
                     memory_key="chat_history",
                     output_key="answer",
@@ -260,7 +283,7 @@ class Chat:
         result = self._qa({"question": query})
         source_documents = result["source_documents"]
         if self.auto_save:
-            save_source_documents(result, source_path=self.previous_messages)
+            save_chat_history(result, source_path=self.previous_messages)
             # save_messages(self._memory, self.previous_messages)
         return result, source_documents
 
@@ -271,7 +294,7 @@ class Chat:
 
     def load_chat_memory(self):
         self._memory.chat_memory.messages = messages_from_dict(
-            load_source_documents(self.previous_messages)
+            load_chat_history(self.previous_messages)
         )
 
     def start(self):
@@ -279,9 +302,9 @@ class Chat:
         while True:
             if n == 0:
                 # display previous messages at beginning of session
-                previous = load_source_documents(self.previous_messages)
+                previous = load_chat_history(self.previous_messages)
                 previous = messages_from_dict(previous)
-                # previous = load_source_documents(self.previous_messages)
+                # previous = load_chat_history(self.previous_messages)
                 for i in range(0, len(previous), 2):
                     self.format_response(
                         query=previous[i].content,
@@ -316,39 +339,3 @@ class Chat:
     @property
     def docs(self):
         return self._docs
-
-
-# @cli.command()
-# def main(
-#    directory: Path,
-#    history: Optional[Path] = None,
-#    ftype: FtypeEnum = FtypeEnum.pdf,
-#    # gradio: bool = False,
-#    chain_type: ChainTypeEnum = ChainTypeEnum.refine,
-#    memory_type: MemoryTypeEnum = MemoryTypeEnum.standard,
-#    max_token_limit: int = 4097,
-#    temperature: float = 0.2,
-#    llm: LlmEnum = LlmEnum.gpt3,
-# ):
-
-# if gradio:
-#     with gr.Blocks() as demo:
-#         chatbot = gr.Chatbot()
-#         msg = gr.Textbox()
-#         clear = gr.Button("Clear")
-
-#         def respond(query, chat_history):
-#             result = qa({"question": query})
-#             save_messages(memory, history_path)
-#             chat_history.append((query, result["answer"]))
-#             time.sleep(1)
-#             return "", chat_history
-
-#         msg.submit(respond, [msg, chatbot], [msg, chatbot])
-#         clear.click(lambda: None, None, chatbot, queue=False)
-#     demo.launch()
-# return qa, memory
-
-
-# if __name__ == "__main__":
-#     cli()
