@@ -41,6 +41,7 @@ class MemoryTypeEnum(Enum):
 class LlmEnum(Enum):
     gpt3 = "gpt-3.5-turbo"
     gpt4 = "gpt4"
+    gpt3_16k = "gpt-3.5-turbo-16k"
 
 
 def load_data(
@@ -70,6 +71,7 @@ def load_data(
     loader = DirectoryLoader(
         directory, glob=str(glob), show_progress=True, use_multithreading=True
     )
+
     docs = loader.load_and_split()
     return docs
 
@@ -207,7 +209,7 @@ class Chat:
         directory: Path,
         ftype: FtypeEnum = FtypeEnum.pdf,
         glob: Optional[str] = None,
-        memory_type: MemoryTypeEnum = MemoryTypeEnum.token,
+        memory_type: MemoryTypeEnum = MemoryTypeEnum.summary_buffer,
         max_token_limit: int = 1300,
         chain_type: ChainTypeEnum = ChainTypeEnum.refine,
         auto_save: bool = True,
@@ -216,19 +218,37 @@ class Chat:
         response_template: str = template,
         llm: LlmEnum = LlmEnum.gpt3,
         temperature: float = 0.2,
+        k: int = 3,
+        persist_directory: Optional[str] = None,
     ):
         self.directory = Path(directory)
         self.previous_messages = self.directory / previous_messages
         self.auto_save = auto_save
         self.response_template = response_template
+        self.k = k
         self.glob = glob
-        self._docs = load_data(self.directory, ftype, self.glob)
-        self.update_metadata()
         embeddings = OpenAIEmbeddings()
-        self._vectorstore = Chroma.from_documents(
-            self._docs,
-            embeddings,
-        )
+        if persist_directory is None:
+            self._docs = load_data(self.directory, ftype, self.glob)
+            self.update_metadata()
+            self._vectorstore = Chroma.from_documents(
+                self._docs, embeddings, persist_directory=persist_directory
+            )
+        elif Path(persist_directory).is_dir():
+            raise NotImplementedError("Persistence not implemented yet")
+            # try:
+            # self._vectorstore = Chroma.from_documents(
+            #     embeddings, persist_directory=persistence_directory
+            # )
+            # print(f"Loaded persistent vectorstore from {persistence_directory}")
+            # # except:
+            #     # self._vectorstore = Chroma.from_documents(
+            #     #     self._docs, embeddings, persist_directory=persistence_directory
+            #     # )
+            #     # self._vectorstore.persist()
+
+        else:
+            raise NotADirectoryError(f"{persist_directory} is not a directory")
 
         llm = ChatOpenAI(model_name=llm.value, temperature=temperature)
         match memory_type:
@@ -261,7 +281,9 @@ class Chat:
         self._qa = ConversationalRetrievalChain.from_llm(
             llm=llm,
             chain_type=chain_type.value,
-            retriever=self._vectorstore.as_retriever(),
+            retriever=self._vectorstore.as_retriever(
+                search_type="mmr", search_kwargs={"k": self.k}
+            ),
             memory=self._memory,
             return_source_documents=True,
         )
