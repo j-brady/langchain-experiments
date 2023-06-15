@@ -1,8 +1,10 @@
 pdfs/*
 text
+urls
 .venv
 .chroma
 *.ipynb
 !ChatNotebookExample.ipynb
 __pycache__/
 .ipynb_checkpoints/
+geckodriver.log
