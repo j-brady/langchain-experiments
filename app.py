@@ -1,5 +1,6 @@
 import time
 import json
+import re
 from pathlib import Path
 from enum import Enum
 from collections import OrderedDict
@@ -8,7 +9,8 @@ from typing import List, Optional
 import pandas as pd
 import numpy as np
 from IPython.display import display, Markdown
-from langchain.document_loaders import DirectoryLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.document_loaders import DirectoryLoader, SeleniumURLLoader
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.chains import ConversationalRetrievalChain
@@ -24,6 +26,7 @@ from langchain.schema import messages_from_dict, Document
 class FtypeEnum(Enum):
     pdf = "pdf"
     txt = "txt"
+    url = "url"
 
 
 class ChainTypeEnum(Enum):
@@ -42,6 +45,31 @@ class LlmEnum(Enum):
     gpt3 = "gpt-3.5-turbo"
     gpt4 = "gpt4"
     gpt3_16k = "gpt-3.5-turbo-16k"
+
+
+class SearchTypeEnum(Enum):
+    maximum_marginal_relevance = "mmr"
+    similarity = "similarity"
+
+
+def clean_text_and_split(documents):
+    new_documents = []
+    for document in documents:
+        document.page_content = re.sub(
+            " +", " ", document.page_content.replace("\n", "")
+        )
+        new_documents.append(document)
+    splitter = RecursiveCharacterTextSplitter()
+    documents = splitter.split_documents(new_documents)
+    return documents
+
+
+def load_urls(path):
+    with open(path) as f:
+        urls = f.readlines()
+        loader = SeleniumURLLoader(urls=urls, browser="firefox")
+        docs = clean_text_and_split(loader.load())
+    return docs
 
 
 def load_data(
@@ -66,13 +94,15 @@ def load_data(
                 glob = "**/*.pdf"
             case ftype.txt:
                 glob = "**/*.txt"
+            case ftype.url:
+                docs = load_urls(directory / "urls.txt")
+                return docs
             case _:
                 raise ValueError("File type not implemented")
     loader = DirectoryLoader(
         directory, glob=str(glob), show_progress=True, use_multithreading=True
     )
-
-    docs = loader.load_and_split()
+    docs = clean_text_and_split(loader.load())
     return docs
 
 
@@ -220,6 +250,7 @@ class Chat:
         temperature: float = 0.2,
         k: int = 3,
         persist_directory: Optional[str] = None,
+        search_type: SearchTypeEnum = SearchTypeEnum.similarity,
     ):
         self.directory = Path(directory)
         self.previous_messages = self.directory / previous_messages
@@ -227,6 +258,7 @@ class Chat:
         self.response_template = response_template
         self.k = k
         self.glob = glob
+        self.search_type = search_type.value
         embeddings = OpenAIEmbeddings()
         if persist_directory is None:
             self._docs = load_data(self.directory, ftype, self.glob)
@@ -282,7 +314,7 @@ class Chat:
             llm=llm,
             chain_type=chain_type.value,
             retriever=self._vectorstore.as_retriever(
-                search_type="mmr", search_kwargs={"k": self.k}
+                search_type=self.search_type, search_kwargs={"k": self.k}
             ),
             memory=self._memory,
             return_source_documents=True,
