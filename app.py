@@ -43,7 +43,7 @@ class MemoryTypeEnum(Enum):
 
 class LlmEnum(Enum):
     gpt3 = "gpt-3.5-turbo"
-    gpt4 = "gpt4"
+    gpt4 = "gpt-4"
     gpt3_16k = "gpt-3.5-turbo-16k"
 
 
@@ -243,7 +243,7 @@ class Chat:
         max_token_limit: int = 1300,
         chain_type: ChainTypeEnum = ChainTypeEnum.refine,
         auto_save: bool = True,
-        previous_messages: Path = Path("history.txt"),
+        previous_messages: Path = Path(".history.json"),
         reload_previous_messages=True,
         response_template: str = template,
         llm: LlmEnum = LlmEnum.gpt3,
